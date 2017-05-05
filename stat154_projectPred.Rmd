@@ -1,0 +1,205 @@
+---
+title: "stat154_projectPred"
+output: pdf_document
+---
+
+```{r }
+library(tm)
+library(DataComputing)
+library(MASS)
+library(e1071)
+library(tree)
+library(randomForest)
+library(glmnet)
+
+setwd("/Users/Steven_Tom/Desktop/Stat 154")
+
+business_test <- read.csv("yelp_academic_dataset_business_test.csv")
+
+review_test <- read.csv("yelp_academic_dataset_review_test.csv")
+
+reviews_test <- review_test[, c('text',"business_id")]
+
+review_by_id_test <-  reviews_test%>%
+  group_by(business_id)%>%
+  summarise_each(funs(toString))
+
+review_by_id_test <- review_by_id_test[review_by_id_test$business_id %in% business_test$business_id , ]
+business_test <- business_test[ business_test$business_id %in%review_by_id_test$business_id, ]
+
+
+review_df_test <- data.frame(review_by_id_test$text)
+
+data_corpus_test <- Corpus(DataframeSource(review_df_test))
+data_corpus_test <- tm_map(data_corpus_test, content_transformer(tolower))
+data_corpus_test <- tm_map(data_corpus_test, removePunctuation)
+# data_corpus_test <- tm_map(data_corpus_test, removeNumbers)#debatable
+
+a = stopwords("en")
+bee = c()
+for (i in 1:length(a)) {
+  if (!(a[i] %in% c("not", "wasn't", "won't", "wouldn't", "can't", "didn't", "don't", "should", "isn't", "aren't", "mustn't", "couldn't", "cannot", "would", "should", "shouldn't", "ought", "hasn't", "haven't", "hadn't", "doesn't", "didn't", "against", "off", "not", "below", "why's", "weren't"))) {
+    bee = c(a[i], bee)
+  }
+}
+
+data_corpus_test <- tm_map(data_corpus_test, removeWords, bee)#takes 10 years
+
+data_corpus_test <- tm_map(data_corpus_test,stemDocument)
+data_corpus_test <-tm_map(data_corpus_test,stripWhitespace)
+data_corpus_test <- tm_map(data_corpus_test, PlainTextDocument)
+
+tdm_test <- DocumentTermMatrix(data_corpus_test)
+
+your_terms_test <- findFreqTerms(tdm_test, lowfreq = 40) #changed to 40
+
+new_tdm_test <-  tdm_test[,your_terms_test ] 
+
+test_set <- as.matrix(new_tdm_test) %>% 
+  as.data.frame()
+
+write.matrix(test_set, file = "wordfeature_testClass.csv", sep = ",")
+
+test_set <- read.csv("wordfeature_testClass.csv")
+
+testing = review_test %>% filter(business_id == "_ucDskZqK5w1QHkoA_nlRw")
+View(testing)
+```
+
+
+```{r}
+attributes_df <- data.frame(business_test$attributes)
+
+data_corpus <- Corpus(DataframeSource(attributes_df))
+data_corpus <- tm_map(data_corpus, content_transformer(tolower))
+data_corpus <- tm_map(data_corpus, removePunctuation)
+# data_corpus <- tm_map(data_corpus, removeNumbers)#debatable
+data_corpus <- tm_map(data_corpus, removeWords, be)#takes 10 years
+
+data_corpus <- tm_map(data_corpus,stemDocument)
+data_corpus <-tm_map(data_corpus,stripWhitespace)
+data_corpus <- tm_map(data_corpus, PlainTextDocument)
+
+tdm <- DocumentTermMatrix(data_corpus)
+
+attributes_feature_test <- as.matrix(tdm) %>% 
+  as.data.frame()
+```
+
+```{r}
+# word_test<- test_set[colnames(test_set) %in% colnames(wordfeature)] 
+# not_in <- wordfeature[!(colnames(wordfeature)%in% colnames(word_test))]
+# m<- matrix(0,ncol =dim(not_in)[2],nrow=440) %>% 
+#   as.data.frame()
+# colnames(m)<-colnames(not_in)
+# word_test <- cbind(word_test,m)
+# word_test <- word_test[,order(names(word_test))]
+#word_test <- cbind(word_test,pow_test)
+```
+
+
+```{r}
+business_test <- business_test[order(business_test$business_id),]
+
+attributes_feature_test1 <- subset(attributes_feature_test, select=c(true, fals))
+attributes_names <- colnames(attributes_feature_test1)
+#attributes_names <- colnames(attributes_feature_test)
+colnames(attributes_feature_test1) <- paste0(attributes_names,"_1")
+
+wordfeature_test <- cbind(attributes_feature_test1, test_set)
+
+wordfeature_test <- cbind(business_test$is_open, business_test$review_count, wordfeature_test)
+colnames(wordfeature_test)[1:2] <- c('is_open', 'review_count')
+
+# wordfeature_test <- cbind( review_by_id_test$business_id, wordfeature_test)
+# colnames(wordfeature_test)[1] <- 'business_id'
+
+```
+
+```{r}
+word_test<- wordfeature_test[colnames(wordfeature_test) %in% colnames(wordfeature_scale)] 
+ not_in <- wordfeature_scale[!(colnames(wordfeature_scale)%in% colnames(word_test))]
+m<- matrix(0,ncol =dim(not_in)[2],nrow=440) %>% 
+  as.data.frame()
+colnames(m)<-colnames(not_in)
+word_test <- cbind(word_test,m)
+
+wordtest_scale <- word_test/wordfeature_test$review_count
+wordtest_scale <- cbind(business_test$business_id, wordtest_scale)
+colnames(wordtest_scale)[1] <- c('business_id')
+
+#word_test <- word_test[,order(names(word_test))]
+```
+
+
+
+```{r}
+training = wordtest_scale[,2:471]
+y_test_pred <- predict(model, newdata = training)
+
+y_test_num = as.numeric(as.character(y_test_pred))
+hist(y_test_num)
+
+
+mean(y_test_num)
+
+submission <-  paste0(business_test$business_id,',', y_test_num)
+
+submission <- c("business_id,stars", submission)
+
+write.table(submission, "predictRFClassification2.txt", col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+c = read.table("predictRF.txt", sep = ",", header = TRUE)
+View(c)
+d = read.table("predictRFClassification2.txt", sep = ",", header = TRUE)
+View(d)
+```
+
+```{r}
+word_test1 <- subset(wordtest_scale, select=-c(business_id))
+y_test_pred_lasso <- predict(lasso_stars, s=bestlam, newx =data.matrix(word_test1))
+
+hist(y_test_pred_lasso)
+mean(y_test_pred_lasso)
+
+```
+
+
+```{r}
+linsvm <- svm(ytrain~., data= train[,-c(1:2) ],type="nu-regression")
+linsvm.pred <- predict(linsvm, newdata=test[,-c(1:2) ])
+
+mean((linsvm.pred-ytest)^2)
+
+hist(linsvm.pred)
+
+
+y_test_pred_svm <- predict(linsvm, newdata = as.matrix(word_test))
+
+hist(y_test_pred_svm)
+
+# y_test_pred_svm[1:15]
+#  
+# (round(y_test_pred_svm*2)/2)[1:15]
+
+submission <-  paste0(business_test$business_id,',', y_test_pred_svm)
+
+submission <- c("business_id,stars", submission)
+
+write.table(submission, "predict_5_svm.txt", col.names = FALSE, row.names = FALSE, quote=FALSE)
+
+```
+
+
+```{r}
+l2 = cv.glmnet(x = as.matrix(train[,-c(1:2) ]), y = ytrain, alpha = 1, nfolds = 10)
+
+
+yhatlasso <- predict(l2, as.matrix(test[ , -c(1:2)]))
+mean((yhatlasso-ytest)^2)
+
+hist(yhatlasso)
+
+```
+
+

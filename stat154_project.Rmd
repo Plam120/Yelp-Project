@@ -1,0 +1,285 @@
+---
+title: "stat154_proj"
+output: pdf_document
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+library(SnowballC)
+library(tm)
+library(tidyr)
+library(MASS)
+library(e1071)
+
+library(tree)
+library(randomForest)
+
+library(glmnet)
+
+setwd("/Users/Steven_Tom/Desktop/Stat 154")
+
+#Not gonna use tip,checkin, user now
+#Another factor is to use the average rating given by users and attach to dataframe later
+
+business_train <- read.csv("yelp_academic_dataset_business_train.csv")
+
+review_train <- read.csv("yelp_academic_dataset_review_train.csv")
+
+reviews <- review_train[, c('text',"business_id")]
+
+#reviews[reviews$business_id%in%business_train$business_id, ]
+
+review_by_id <-  reviews%>%
+  group_by(business_id)%>%
+  summarise_each(funs(toString))
+
+sum(review_by_id$business_id %in% business_train$business_id)#Some businesses do not have reviews
+
+review_by_id <- review_by_id[review_by_id$business_id %in% business_train$business_id , ]
+business_train <- business_train[ business_train$business_id %in%review_by_id$business_id, ]
+
+hist(review_train$stars)
+
+hist(business_train$stars, xlab="Average Star Rating", main="Frequency Distribution of Rating (Training)")
+
+ggplot(aes(y = stars, x = city), data = business_train) + geom_boxplot()
+
+ggplot(aes(y = stars, x = state), data = business_train) + geom_boxplot()
+
+plot(business_train$review_count[business_train$stars==5])
+```
+
+
+
+NLP: Changing the concatenated reviews into a word feature matrix
+```{r}
+review_df <- data.frame(review_by_id$text)
+
+data_corpus <- Corpus(DataframeSource(review_df))
+data_corpus <- tm_map(data_corpus, content_transformer(tolower))
+data_corpus <- tm_map(data_corpus, removePunctuation)
+# data_corpus <- tm_map(data_corpus, removeNumbers)#debatable
+
+a = stopwords("en")
+bee = c()
+for (i in 1:length(a)) {
+  if (!(a[i] %in% c("not", "wasn't", "won't", "wouldn't", "can't", "didn't", "don't", "should", "isn't", "aren't", "mustn't", "couldn't", "cannot", "would", "should", "shouldn't", "ought", "hasn't", "haven't", "hadn't", "doesn't", "didn't", "against", "off", "not", "below", "why's", "weren't"))) {
+    bee = c(a[i], bee)
+  }
+}
+
+data_corpus <- tm_map(data_corpus, removeWords, bee)#takes 10 years
+
+data_corpus <- tm_map(data_corpus,stemDocument)
+data_corpus <-tm_map(data_corpus,stripWhitespace)
+data_corpus <- tm_map(data_corpus, PlainTextDocument)
+
+tdm <- DocumentTermMatrix(data_corpus)
+
+your_terms <- findFreqTerms(tdm, lowfreq = 2500) 
+
+new_tdm <-  tdm[,your_terms ] 
+
+#Try this
+#tdm = removeSparseTerms(tdm, 0.99)
+
+train <- as.matrix(new_tdm) %>% 
+  as.data.frame()
+train_matrix <- train##
+write.matrix(train, file = "wordfeature2.csv", sep = ",")
+
+```
+
+```{r}
+# business_train$attributes[1]
+# 
+business_train$attributes[1:3]
+# 
+# business_train$attributes['Alcohol'] 
+# 
+# names(business_train$attributes)
+
+
+attributes_df <- data.frame(business_train$attributes)
+
+data_corpus <- Corpus(DataframeSource(attributes_df))
+data_corpus <- tm_map(data_corpus, content_transformer(tolower))
+data_corpus <- tm_map(data_corpus, removePunctuation)
+# data_corpus <- tm_map(data_corpus, removeNumbers)#debatable
+data_corpus <- tm_map(data_corpus, removeWords, bee)#takes 10 years
+
+data_corpus <- tm_map(data_corpus,stemDocument)
+data_corpus <-tm_map(data_corpus,stripWhitespace)
+data_corpus <- tm_map(data_corpus, PlainTextDocument)
+
+tdm <- DocumentTermMatrix(data_corpus)
+
+attributes_feature <- as.matrix(tdm) %>% 
+  as.data.frame()
+
+```
+
+
+```{r}
+wordfeature <- read.csv("wordfeature2.csv")
+
+business_train <- business_train[order(business_train$business_id),]
+
+# attributes_feature1 <- subset(attributes_feature, select=c(true, false))
+attributes_names <- colnames(attributes_feature1)
+colnames(attributes_feature1) <- paste0(attributes_names,"_1")
+wordfeature <- cbind(attributes_feature1, wordfeature)
+
+wordfeature <- cbind(business_train$is_open, business_train$review_count, wordfeature)
+colnames(wordfeature)[1:2] <- c('is_open', 'review_count')
+
+wordfeature <- cbind( review_by_id$business_id, wordfeature)
+colnames(wordfeature)[1] <- 'business_id'
+
+wordfeature <- cbind(business_train$stars[business_train$business_id %in%wordfeature$business_id], wordfeature)
+colnames(wordfeature)[1] <- 'stars'
+
+wordfeature_scale <- wordfeature[ , -c(1:6)]/wordfeature$review_count
+wordfeature_scale <- cbind(wordfeature$business_id, wordfeature$stars, wordfeature_scale)
+colnames(wordfeature_scale)[1:2] <- c('business_id', 'stars')
+#wordfeature_scale$business_id <- wordfeature$business_id
+#wordfeature[ , -c(1:3)] <- apply(wordfeature[ , -c(1:3)], 2,scale)
+
+#Model
+set.seed(1)
+ntest <- floor(nrow(wordfeature_scale)*0.7) #0.7 proportion as train set
+index <- sample(1:nrow(wordfeature_scale),ntest) 
+test <-  wordfeature_scale[-index, ]
+ytest <- wordfeature_scale$stars[-index]
+train <- wordfeature_scale[index,]
+ytrain <- wordfeature_scale$stars[index]
+
+unique (ytrain)
+as.factor(ytrain)
+
+
+model <- randomForest(as.factor(ytrain)~., data = train[,3:470],ntree=1500 )#change ntree based on results below
+#####
+# lm_stars <-  lm(ytrain~.,data=train[,3:405])
+# pred_lm = predict(lm_stars, test[ , -c(1:2)])
+# sum(pred_lm - ytest)
+# mean((pred_lm - ytest)^2)  #.283
+####
+
+yhat <- predict(model,test[,3:470])
+
+table(yhat, ytest)
+
+sum(diag(table(yhat,ytest)))/sum(table(yhat, ytest))
+
+y_hat_class <-  as.numeric(as.character(yhat))
+count(abs(y_hat_class - ytest) >= 1)
+
+
+mean((y_hat_class - ytest)^2)
+
+plot(y_hat_class - ytest)
+
+
+hist(yhat)
+
+a = yscaledhat - ytest
+plot(a)
+b = c()
+for(i in 1:length(a)) {
+  if (a[i] > 0.8) {
+    b = c(b, i)
+  }
+}
+b
+View(test[b,])
+
+bad_restaurants = test %>% filter(stars < 2.1)
+wrong_errors <-  test[b, ]
+# 
+# mean(yhat - ytest)
+mean((y_hat_class-ytest)^2)
+
+model
+# rounded_rf = floor(yhat*2)/2
+# mean((rounded_rf - ytest)^2)
+
+important <-  importance(model) #list of top words
+
+varImpPlot(model) #Pretty chart of words
+?varImpPlot
+
+```
+
+
+14% of our data has a classification error of greater than 1 1. 43% were classified correctly and 43% had an error of .5. 
+
+
+
+
+
+
+SVM
+```{r}
+linsvm = svm(as.factor(ytrain)~.-business_id-stars, data = train, type = "C-classification")
+linsvm.pred = predict(linsvm, newdata = test)
+
+table(linsvm.pred, ytest)
+
+sum(diag(table(linsvm.pred,ytest)))/sum(table(linsvm.pred, ytest))  #.47
+
+y_hat_svm <-  as.numeric(as.character(linsvm.pred))
+mean((y_hat_svm - ytest)^2)
+
+plot(y_hat_svm - ytest)
+
+
+hist(yhat)
+```
+
+
+Lasso
+```{r}
+grid <- 10^seq(10, -2, length=300)
+
+train1 <-data.matrix(train[ , -c(1:2)])
+ytrain1 <- data.matrix(ytrain)
+test1 <- data.matrix(test[ , -c(1:2)])
+
+lasso_stars <- glmnet(train1, ytrain1, alpha=1, lambda = grid)
+plot(lasso_stars)
+cv.out <- cv.glmnet(train1, ytrain1, alpha=1)
+plot(cv.out)
+bestlam <- cv.out$lambda.min
+bestlam
+
+lasso.pred <- predict(lasso_stars, s=bestlam,newx = test1)
+
+hist(lasso.pred)
+
+
+mean(lasso.pred)   # overpredicting
+
+lasso_errors = lasso.pred - ytest
+plot(lasso_errors)
+d = c()
+for(i in 1:length(lasso_errors)) {
+  if (lasso_errors[i] > 0.8) {
+    d = c(d, i)
+  }
+}
+d
+View(test[d,])
+
+mean((lasso.pred-ytest)^2)
+
+```
+
+Neural Net
+```{r}
+mx_model <- mx.mlp(train1, as.factor(ytrain), hidden_node=c(128,64), out_node=2, activation="relu", out_activation="softmax",num.round=100, array.batch.size=15, learning.rate=0.07, momentum=0.9, device=mx.cpu())
+
+```
+
